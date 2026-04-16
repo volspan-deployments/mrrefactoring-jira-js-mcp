@@ -39,6 +39,7 @@ def get_headers():
 @mcp.tool()
 async def get_myself() -> dict:
     """Get the details of the currently authenticated user."""
+    _track("get_myself")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/myself",
@@ -51,6 +52,7 @@ async def get_myself() -> dict:
 
 @mcp.tool()
 async def search_issues(
+    _track("search_issues")
     jql: str,
     start_at: int = 0,
     max_results: int = 50,
@@ -91,6 +93,7 @@ async def get_issue(issue_key: str, fields: Optional[str] = None) -> dict:
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
         fields: Comma-separated list of fields to include
     """
+    _track("get_issue")
     params: dict[str, Any] = {}
     if fields:
         params["fields"] = fields
@@ -108,6 +111,7 @@ async def get_issue(issue_key: str, fields: Optional[str] = None) -> dict:
 
 @mcp.tool()
 async def create_issue(
+    _track("create_issue")
     project_key: str,
     summary: str,
     issue_type: str = "Task",
@@ -167,6 +171,7 @@ async def create_issue(
 
 @mcp.tool()
 async def update_issue(
+    _track("update_issue")
     issue_key: str,
     summary: Optional[str] = None,
     description: Optional[str] = None,
@@ -228,6 +233,7 @@ async def delete_issue(issue_key: str) -> dict:
     Args:
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
     """
+    _track("delete_issue")
     async with httpx.AsyncClient() as client:
         response = await client.delete(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}",
@@ -246,6 +252,7 @@ async def transition_issue(issue_key: str, transition_id: str) -> dict:
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
         transition_id: The ID of the transition to perform
     """
+    _track("transition_issue")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/transitions",
@@ -264,6 +271,7 @@ async def get_issue_transitions(issue_key: str) -> dict:
     Args:
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
     """
+    _track("get_issue_transitions")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/transitions",
@@ -282,6 +290,7 @@ async def add_comment(issue_key: str, comment_text: str) -> dict:
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
         comment_text: The text of the comment to add
     """
+    _track("add_comment")
     body = {
         "body": {
             "type": "doc",
@@ -315,6 +324,7 @@ async def get_issue_comments(issue_key: str, start_at: int = 0, max_results: int
         start_at: Index of the first result to return (0-based)
         max_results: Maximum number of results to return
     """
+    _track("get_issue_comments")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/comment",
@@ -334,6 +344,7 @@ async def get_projects(start_at: int = 0, max_results: int = 50) -> dict:
         start_at: Index of the first result to return (0-based)
         max_results: Maximum number of results to return
     """
+    _track("get_projects")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/search",
@@ -352,6 +363,7 @@ async def get_project(project_key: str) -> dict:
     Args:
         project_key: The project key (e.g. 'MYPROJECT')
     """
+    _track("get_project")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/{project_key}",
@@ -364,6 +376,7 @@ async def get_project(project_key: str) -> dict:
 
 @mcp.tool()
 async def get_project_issues(
+    _track("get_project_issues")
     project_key: str,
     start_at: int = 0,
     max_results: int = 50,
@@ -406,6 +419,7 @@ async def get_boards(project_key: Optional[str] = None, start_at: int = 0, max_r
         start_at: Index of the first result to return (0-based)
         max_results: Maximum number of results to return
     """
+    _track("get_boards")
     params: dict[str, Any] = {"startAt": start_at, "maxResults": max_results}
     if project_key:
         params["projectKeyOrId"] = project_key
@@ -423,6 +437,7 @@ async def get_boards(project_key: Optional[str] = None, start_at: int = 0, max_r
 
 @mcp.tool()
 async def get_board_sprints(
+    _track("get_board_sprints")
     board_id: int,
     state: Optional[str] = None,
     start_at: int = 0,
@@ -453,6 +468,7 @@ async def get_board_sprints(
 
 @mcp.tool()
 async def get_sprint_issues(
+    _track("get_sprint_issues")
     sprint_id: int,
     start_at: int = 0,
     max_results: int = 50,
@@ -484,6 +500,7 @@ async def get_users(query: Optional[str] = None, start_at: int = 0, max_results:
         start_at: Index of the first result to return (0-based)
         max_results: Maximum number of results to return
     """
+    _track("get_users")
     params: dict[str, Any] = {"startAt": start_at, "maxResults": max_results}
     if query:
         params["query"] = query
@@ -506,6 +523,7 @@ async def get_issue_types(project_key: Optional[str] = None) -> dict:
     Args:
         project_key: Filter issue types by project key
     """
+    _track("get_issue_types")
     async with httpx.AsyncClient() as client:
         if project_key:
             response = await client.get(
@@ -526,6 +544,7 @@ async def get_issue_types(project_key: Optional[str] = None) -> dict:
 
 @mcp.tool()
 async def add_worklog(
+    _track("add_worklog")
     issue_key: str,
     time_spent: str,
     comment: Optional[str] = None,
@@ -576,6 +595,7 @@ async def get_worklogs(issue_key: str, start_at: int = 0, max_results: int = 50)
         start_at: Index of the first result to return (0-based)
         max_results: Maximum number of results to return
     """
+    _track("get_worklogs")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/worklog",
@@ -594,6 +614,7 @@ async def get_project_versions(project_key: str) -> dict:
     Args:
         project_key: The project key (e.g. 'MYPROJECT')
     """
+    _track("get_project_versions")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/{project_key}/versions",
@@ -611,6 +632,7 @@ async def get_project_components(project_key: str) -> dict:
     Args:
         project_key: The project key (e.g. 'MYPROJECT')
     """
+    _track("get_project_components")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/{project_key}/components",
@@ -629,6 +651,7 @@ async def assign_issue(issue_key: str, account_id: Optional[str] = None) -> dict
         issue_key: The Jira issue key (e.g. 'PROJECT-123')
         account_id: Account ID of the user to assign to. Pass null/empty to unassign.
     """
+    _track("assign_issue")
     body: dict[str, Any] = {"accountId": account_id if account_id else None}
 
     async with httpx.AsyncClient() as client:
@@ -645,6 +668,7 @@ async def assign_issue(issue_key: str, account_id: Optional[str] = None) -> dict
 @mcp.tool()
 async def get_issue_link_types() -> dict:
     """Get all available issue link types in Jira."""
+    _track("get_issue_link_types")
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issueLinkType",
@@ -657,6 +681,7 @@ async def get_issue_link_types() -> dict:
 
 @mcp.tool()
 async def link_issues(
+    _track("link_issues")
     link_type: str,
     inward_issue_key: str,
     outward_issue_key: str,

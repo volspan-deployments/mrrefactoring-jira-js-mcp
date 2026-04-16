@@ -14,47 +14,93 @@ load_dotenv()
 mcp = FastMCP("Jira.js MCP Server")
 
 API_TOKEN = os.environ.get("API_TOKEN", "")
-JIRA_HOST = os.environ.get("HOST", "")
-JIRA_EMAIL = os.environ.get("EMAIL", "")
+HOST = os.environ.get("HOST", "")
+EMAIL = os.environ.get("EMAIL", "")
 
 
 def get_base_url() -> str:
-    host = JIRA_HOST.rstrip("/")
+    host = HOST.rstrip("/")
     if not host.startswith("http"):
         host = f"https://{host}"
     return host
 
 
-def get_auth_headers() -> dict:
-    import base64
-    credentials = base64.b64encode(f"{JIRA_EMAIL}:{API_TOKEN}".encode()).decode()
+def get_auth():
+    return (EMAIL, API_TOKEN)
+
+
+def get_headers():
     return {
-        "Authorization": f"Basic {credentials}",
-        "Content-Type": "application/json",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
 
 @mcp.tool()
-async def get_issue(issue_key: str) -> dict:
-    """Get details of a Jira issue by its key (e.g. PROJECT-123)."""
+async def get_myself() -> dict:
+    """Get the details of the currently authenticated user."""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{get_base_url()}/rest/api/3/issue/{issue_key}",
-            headers=get_auth_headers(),
+            f"{get_base_url()}/rest/api/3/myself",
+            auth=get_auth(),
+            headers=get_headers(),
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def search_issues(jql: str, max_results: int = 50, start_at: int = 0) -> dict:
-    """Search Jira issues using JQL (Jira Query Language)."""
+async def search_issues(
+    jql: str,
+    start_at: int = 0,
+    max_results: int = 50,
+    fields: Optional[str] = None,
+) -> dict:
+    """Search for Jira issues using JQL (Jira Query Language).
+    
+    Args:
+        jql: JQL query string (e.g. 'project = MY_PROJECT AND status = Open')
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return (default 50)
+        fields: Comma-separated list of fields to include (e.g. 'summary,status,assignee')
+    """
+    params: dict[str, Any] = {
+        "jql": jql,
+        "startAt": start_at,
+        "maxResults": max_results,
+    }
+    if fields:
+        params["fields"] = fields
+
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{get_base_url()}/rest/api/3/issue/search",
-            headers=get_auth_headers(),
-            json={"jql": jql, "maxResults": max_results, "startAt": start_at},
+        response = await client.get(
+            f"{get_base_url()}/rest/api/3/search",
+            auth=get_auth(),
+            headers=get_headers(),
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_issue(issue_key: str, fields: Optional[str] = None) -> dict:
+    """Get details of a specific Jira issue by its key (e.g. 'PROJECT-123').
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        fields: Comma-separated list of fields to include
+    """
+    params: dict[str, Any] = {}
+    if fields:
+        params["fields"] = fields
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{get_base_url()}/rest/api/3/issue/{issue_key}",
+            auth=get_auth(),
+            headers=get_headers(),
+            params=params,
         )
         response.raise_for_status()
         return response.json()
@@ -68,30 +114,51 @@ async def create_issue(
     description: Optional[str] = None,
     assignee_account_id: Optional[str] = None,
     priority: Optional[str] = None,
-    labels: Optional[list] = None,
+    labels: Optional[list[str]] = None,
 ) -> dict:
-    """Create a new Jira issue."""
+    """Create a new Jira issue.
+    
+    Args:
+        project_key: The project key (e.g. 'MYPROJECT')
+        summary: Issue summary/title
+        issue_type: Issue type name (e.g. 'Task', 'Bug', 'Story', 'Epic')
+        description: Issue description text
+        assignee_account_id: Account ID of the user to assign the issue to
+        priority: Priority name (e.g. 'High', 'Medium', 'Low')
+        labels: List of labels to add to the issue
+    """
     fields: dict[str, Any] = {
         "project": {"key": project_key},
         "summary": summary,
         "issuetype": {"name": issue_type},
     }
+
     if description:
         fields["description"] = {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": description}],
+                }
+            ],
         }
+
     if assignee_account_id:
         fields["assignee"] = {"accountId": assignee_account_id}
+
     if priority:
         fields["priority"] = {"name": priority}
+
     if labels:
         fields["labels"] = labels
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issue",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json={"fields": fields},
         )
         response.raise_for_status()
@@ -105,91 +172,134 @@ async def update_issue(
     description: Optional[str] = None,
     assignee_account_id: Optional[str] = None,
     priority: Optional[str] = None,
-    labels: Optional[list] = None,
+    labels: Optional[list[str]] = None,
 ) -> dict:
-    """Update fields of an existing Jira issue."""
+    """Update an existing Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        summary: New summary/title
+        description: New description text
+        assignee_account_id: Account ID of the new assignee (set to empty string to unassign)
+        priority: New priority name (e.g. 'High', 'Medium', 'Low')
+        labels: New list of labels
+    """
     fields: dict[str, Any] = {}
-    if summary:
+
+    if summary is not None:
         fields["summary"] = summary
-    if description:
+
+    if description is not None:
         fields["description"] = {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": description}],
+                }
+            ],
         }
-    if assignee_account_id:
-        fields["assignee"] = {"accountId": assignee_account_id}
-    if priority:
+
+    if assignee_account_id is not None:
+        fields["assignee"] = {"accountId": assignee_account_id} if assignee_account_id else None
+
+    if priority is not None:
         fields["priority"] = {"name": priority}
+
     if labels is not None:
         fields["labels"] = labels
+
     async with httpx.AsyncClient() as client:
         response = await client.put(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json={"fields": fields},
         )
-        if response.status_code == 204:
-            return {"success": True, "message": f"Issue {issue_key} updated successfully."}
         response.raise_for_status()
-        return response.json()
+        return {"success": True, "issue_key": issue_key}
 
 
 @mcp.tool()
 async def delete_issue(issue_key: str) -> dict:
-    """Delete a Jira issue by its key."""
+    """Delete a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+    """
     async with httpx.AsyncClient() as client:
         response = await client.delete(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
         )
-        if response.status_code == 204:
-            return {"success": True, "message": f"Issue {issue_key} deleted successfully."}
         response.raise_for_status()
-        return response.json()
+        return {"success": True, "issue_key": issue_key}
 
 
 @mcp.tool()
 async def transition_issue(issue_key: str, transition_id: str) -> dict:
-    """Transition a Jira issue to a new status using a transition ID."""
+    """Transition a Jira issue to a new status using a transition ID.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        transition_id: The ID of the transition to perform
+    """
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/transitions",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json={"transition": {"id": transition_id}},
         )
-        if response.status_code == 204:
-            return {"success": True, "message": f"Issue {issue_key} transitioned successfully."}
         response.raise_for_status()
-        return response.json()
+        return {"success": True, "issue_key": issue_key, "transition_id": transition_id}
 
 
 @mcp.tool()
 async def get_issue_transitions(issue_key: str) -> dict:
-    """Get available transitions for a Jira issue."""
+    """Get available transitions for a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/transitions",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def add_comment(issue_key: str, comment_body: str) -> dict:
-    """Add a comment to a Jira issue."""
+async def add_comment(issue_key: str, comment_text: str) -> dict:
+    """Add a comment to a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        comment_text: The text of the comment to add
+    """
     body = {
         "body": {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment_body}]}],
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": comment_text}],
+                }
+            ],
         }
     }
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/comment",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json=body,
         )
         response.raise_for_status()
@@ -197,26 +307,39 @@ async def add_comment(issue_key: str, comment_body: str) -> dict:
 
 
 @mcp.tool()
-async def get_comments(issue_key: str, max_results: int = 50, start_at: int = 0) -> dict:
-    """Get comments for a Jira issue."""
+async def get_issue_comments(issue_key: str, start_at: int = 0, max_results: int = 50) -> dict:
+    """Get comments for a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/comment",
-            headers=get_auth_headers(),
-            params={"maxResults": max_results, "startAt": start_at},
+            auth=get_auth(),
+            headers=get_headers(),
+            params={"startAt": start_at, "maxResults": max_results},
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def get_projects(max_results: int = 50, start_at: int = 0) -> dict:
-    """Get all Jira projects accessible to the authenticated user."""
+async def get_projects(start_at: int = 0, max_results: int = 50) -> dict:
+    """Get all accessible Jira projects.
+    
+    Args:
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/search",
-            headers=get_auth_headers(),
-            params={"maxResults": max_results, "startAt": start_at},
+            auth=get_auth(),
+            headers=get_headers(),
+            params={"startAt": start_at, "maxResults": max_results},
         )
         response.raise_for_status()
         return response.json()
@@ -224,66 +347,74 @@ async def get_projects(max_results: int = 50, start_at: int = 0) -> dict:
 
 @mcp.tool()
 async def get_project(project_key: str) -> dict:
-    """Get details of a specific Jira project by its key."""
+    """Get details of a specific Jira project.
+    
+    Args:
+        project_key: The project key (e.g. 'MYPROJECT')
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/project/{project_key}",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def get_myself() -> dict:
-    """Get details of the currently authenticated Jira user."""
+async def get_project_issues(
+    project_key: str,
+    start_at: int = 0,
+    max_results: int = 50,
+    status: Optional[str] = None,
+    issue_type: Optional[str] = None,
+) -> dict:
+    """Get issues for a specific Jira project.
+    
+    Args:
+        project_key: The project key (e.g. 'MYPROJECT')
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+        status: Filter by status name (e.g. 'Open', 'In Progress', 'Done')
+        issue_type: Filter by issue type (e.g. 'Bug', 'Task', 'Story')
+    """
+    jql_parts = [f"project = {project_key}"]
+    if status:
+        jql_parts.append(f'status = "{status}"')
+    if issue_type:
+        jql_parts.append(f'issuetype = "{issue_type}"')
+    jql = " AND ".join(jql_parts)
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{get_base_url()}/rest/api/3/myself",
-            headers=get_auth_headers(),
+            f"{get_base_url()}/rest/api/3/search",
+            auth=get_auth(),
+            headers=get_headers(),
+            params={"jql": jql, "startAt": start_at, "maxResults": max_results},
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def get_user(account_id: str) -> dict:
-    """Get details of a Jira user by their account ID."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/user",
-            headers=get_auth_headers(),
-            params={"accountId": account_id},
-        )
-        response.raise_for_status()
-        return response.json()
+async def get_boards(project_key: Optional[str] = None, start_at: int = 0, max_results: int = 50) -> dict:
+    """Get all Agile boards, optionally filtered by project.
+    
+    Args:
+        project_key: Filter boards by project key
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
+    params: dict[str, Any] = {"startAt": start_at, "maxResults": max_results}
+    if project_key:
+        params["projectKeyOrId"] = project_key
 
-
-@mcp.tool()
-async def find_users(query: str, max_results: int = 50) -> dict:
-    """Search for Jira users by display name or email."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/user/search",
-            headers=get_auth_headers(),
-            params={"query": query, "maxResults": max_results},
-        )
-        response.raise_for_status()
-        return {"users": response.json()}
-
-
-@mcp.tool()
-async def get_boards(project_key_or_id: Optional[str] = None, board_type: Optional[str] = None, max_results: int = 50, start_at: int = 0) -> dict:
-    """Get all Agile boards, optionally filtered by project key or board type (scrum, kanban)."""
-    params: dict[str, Any] = {"maxResults": max_results, "startAt": start_at}
-    if project_key_or_id:
-        params["projectKeyOrId"] = project_key_or_id
-    if board_type:
-        params["type"] = board_type
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/agile/1.0/board",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             params=params,
         )
         response.raise_for_status()
@@ -291,15 +422,29 @@ async def get_boards(project_key_or_id: Optional[str] = None, board_type: Option
 
 
 @mcp.tool()
-async def get_board_sprints(board_id: int, state: Optional[str] = None, max_results: int = 50, start_at: int = 0) -> dict:
-    """Get sprints for an Agile board. State can be 'active', 'future', or 'closed'."""
-    params: dict[str, Any] = {"maxResults": max_results, "startAt": start_at}
+async def get_board_sprints(
+    board_id: int,
+    state: Optional[str] = None,
+    start_at: int = 0,
+    max_results: int = 50,
+) -> dict:
+    """Get sprints for a specific Agile board.
+    
+    Args:
+        board_id: The ID of the board
+        state: Filter by sprint state ('active', 'closed', 'future')
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
+    params: dict[str, Any] = {"startAt": start_at, "maxResults": max_results}
     if state:
         params["state"] = state
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/agile/1.0/board/{board_id}/sprint",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             params=params,
         )
         response.raise_for_status()
@@ -307,42 +452,74 @@ async def get_board_sprints(board_id: int, state: Optional[str] = None, max_resu
 
 
 @mcp.tool()
-async def get_sprint(sprint_id: int) -> dict:
-    """Get details of a specific Agile sprint by its ID."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/agile/1.0/sprint/{sprint_id}",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-@mcp.tool()
-async def get_sprint_issues(sprint_id: int, max_results: int = 50, start_at: int = 0) -> dict:
-    """Get all issues in a specific Agile sprint."""
+async def get_sprint_issues(
+    sprint_id: int,
+    start_at: int = 0,
+    max_results: int = 50,
+) -> dict:
+    """Get issues in a specific sprint.
+    
+    Args:
+        sprint_id: The ID of the sprint
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/agile/1.0/sprint/{sprint_id}/issue",
-            headers=get_auth_headers(),
-            params={"maxResults": max_results, "startAt": start_at},
+            auth=get_auth(),
+            headers=get_headers(),
+            params={"startAt": start_at, "maxResults": max_results},
         )
         response.raise_for_status()
         return response.json()
 
 
 @mcp.tool()
-async def get_board_backlog(board_id: int, jql: Optional[str] = None, max_results: int = 50, start_at: int = 0) -> dict:
-    """Get the backlog issues for an Agile board."""
-    params: dict[str, Any] = {"maxResults": max_results, "startAt": start_at}
-    if jql:
-        params["jql"] = jql
+async def get_users(query: Optional[str] = None, start_at: int = 0, max_results: int = 50) -> dict:
+    """Search for Jira users.
+    
+    Args:
+        query: Search query string (searches username, name, email)
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
+    params: dict[str, Any] = {"startAt": start_at, "maxResults": max_results}
+    if query:
+        params["query"] = query
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{get_base_url()}/rest/agile/1.0/board/{board_id}/backlog",
-            headers=get_auth_headers(),
+            f"{get_base_url()}/rest/api/3/users/search",
+            auth=get_auth(),
+            headers=get_headers(),
             params=params,
         )
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_issue_types(project_key: Optional[str] = None) -> dict:
+    """Get all available issue types, optionally filtered by project.
+    
+    Args:
+        project_key: Filter issue types by project key
+    """
+    async with httpx.AsyncClient() as client:
+        if project_key:
+            response = await client.get(
+                f"{get_base_url()}/rest/api/3/issuetype/project",
+                auth=get_auth(),
+                headers=get_headers(),
+                params={"projectId": project_key},
+            )
+        else:
+            response = await client.get(
+                f"{get_base_url()}/rest/api/3/issuetype",
+                auth=get_auth(),
+                headers=get_headers(),
+            )
         response.raise_for_status()
         return response.json()
 
@@ -354,20 +531,36 @@ async def add_worklog(
     comment: Optional[str] = None,
     started: Optional[str] = None,
 ) -> dict:
-    """Add a worklog entry to a Jira issue. time_spent should be in Jira duration format (e.g. '1h 30m'). started is ISO8601 datetime string."""
+    """Add a worklog entry to a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        time_spent: Time spent in Jira time format (e.g. '2h 30m', '1d', '30m')
+        comment: Optional comment for the worklog
+        started: When the work started in ISO 8601 format (e.g. '2024-01-15T09:00:00.000+0000')
+    """
     body: dict[str, Any] = {"timeSpent": time_spent}
+
     if comment:
         body["comment"] = {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": comment}],
+                }
+            ],
         }
+
     if started:
         body["started"] = started
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/worklog",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json=body,
         )
         response.raise_for_status()
@@ -375,15 +568,78 @@ async def add_worklog(
 
 
 @mcp.tool()
-async def get_worklogs(issue_key: str) -> dict:
-    """Get all worklogs for a Jira issue."""
+async def get_worklogs(issue_key: str, start_at: int = 0, max_results: int = 50) -> dict:
+    """Get worklogs for a Jira issue.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        start_at: Index of the first result to return (0-based)
+        max_results: Maximum number of results to return
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issue/{issue_key}/worklog",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
+            params={"startAt": start_at, "maxResults": max_results},
         )
         response.raise_for_status()
         return response.json()
+
+
+@mcp.tool()
+async def get_project_versions(project_key: str) -> dict:
+    """Get all versions for a Jira project.
+    
+    Args:
+        project_key: The project key (e.g. 'MYPROJECT')
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{get_base_url()}/rest/api/3/project/{project_key}/versions",
+            auth=get_auth(),
+            headers=get_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def get_project_components(project_key: str) -> dict:
+    """Get all components for a Jira project.
+    
+    Args:
+        project_key: The project key (e.g. 'MYPROJECT')
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{get_base_url()}/rest/api/3/project/{project_key}/components",
+            auth=get_auth(),
+            headers=get_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+@mcp.tool()
+async def assign_issue(issue_key: str, account_id: Optional[str] = None) -> dict:
+    """Assign a Jira issue to a user or unassign it.
+    
+    Args:
+        issue_key: The Jira issue key (e.g. 'PROJECT-123')
+        account_id: Account ID of the user to assign to. Pass null/empty to unassign.
+    """
+    body: dict[str, Any] = {"accountId": account_id if account_id else None}
+
+    async with httpx.AsyncClient() as client:
+        response = await client.put(
+            f"{get_base_url()}/rest/api/3/issue/{issue_key}/assignee",
+            auth=get_auth(),
+            headers=get_headers(),
+            json=body,
+        )
+        response.raise_for_status()
+        return {"success": True, "issue_key": issue_key, "assignee": account_id}
 
 
 @mcp.tool()
@@ -392,7 +648,8 @@ async def get_issue_link_types() -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{get_base_url()}/rest/api/3/issueLinkType",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
         )
         response.raise_for_status()
         return response.json()
@@ -400,134 +657,48 @@ async def get_issue_link_types() -> dict:
 
 @mcp.tool()
 async def link_issues(
+    link_type: str,
     inward_issue_key: str,
     outward_issue_key: str,
-    link_type_name: str,
     comment: Optional[str] = None,
 ) -> dict:
-    """Create a link between two Jira issues."""
+    """Create a link between two Jira issues.
+    
+    Args:
+        link_type: The name of the link type (e.g. 'Blocks', 'Clones', 'Duplicate')
+        inward_issue_key: The key of the inward issue (e.g. 'PROJECT-123')
+        outward_issue_key: The key of the outward issue (e.g. 'PROJECT-456')
+        comment: Optional comment to add with the link
+    """
     body: dict[str, Any] = {
-        "type": {"name": link_type_name},
+        "type": {"name": link_type},
         "inwardIssue": {"key": inward_issue_key},
         "outwardIssue": {"key": outward_issue_key},
     }
+
     if comment:
         body["comment"] = {
             "body": {
                 "type": "doc",
                 "version": 1,
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": comment}],
+                    }
+                ],
             }
         }
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{get_base_url()}/rest/api/3/issueLink",
-            headers=get_auth_headers(),
+            auth=get_auth(),
+            headers=get_headers(),
             json=body,
         )
-        if response.status_code == 201:
-            return {"success": True, "message": "Issue link created successfully."}
         response.raise_for_status()
-        return response.json()
-
-
-@mcp.tool()
-async def get_project_versions(project_key: str) -> dict:
-    """Get all versions (releases) for a Jira project."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/project/{project_key}/versions",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return {"versions": response.json()}
-
-
-@mcp.tool()
-async def get_project_components(project_key: str) -> dict:
-    """Get all components for a Jira project."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/project/{project_key}/components",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return {"components": response.json()}
-
-
-@mcp.tool()
-async def get_issue_types() -> dict:
-    """Get all issue types available in the Jira instance."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/issuetype",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return {"issueTypes": response.json()}
-
-
-@mcp.tool()
-async def get_priorities() -> dict:
-    """Get all available issue priorities in Jira."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/priority",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return {"priorities": response.json()}
-
-
-@mcp.tool()
-async def get_statuses() -> dict:
-    """Get all available issue statuses in Jira."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/status",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return {"statuses": response.json()}
-
-
-@mcp.tool()
-async def assign_issue(issue_key: str, account_id: Optional[str] = None) -> dict:
-    """Assign a Jira issue to a user. Pass null account_id to unassign."""
-    async with httpx.AsyncClient() as client:
-        response = await client.put(
-            f"{get_base_url()}/rest/api/3/issue/{issue_key}/assignee",
-            headers=get_auth_headers(),
-            json={"accountId": account_id},
-        )
-        if response.status_code == 204:
-            return {"success": True, "message": f"Issue {issue_key} assigned successfully."}
-        response.raise_for_status()
-        return response.json()
-
-
-@mcp.tool()
-async def get_issue_watchers(issue_key: str) -> dict:
-    """Get all watchers of a Jira issue."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/issue/{issue_key}/watchers",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-@mcp.tool()
-async def get_server_info() -> dict:
-    """Get information about the Jira server/instance."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{get_base_url()}/rest/api/3/serverInfo",
-            headers=get_auth_headers(),
-        )
-        response.raise_for_status()
-        return response.json()
+        return {"success": True, "inward_issue": inward_issue_key, "outward_issue": outward_issue_key}
 
 
 
